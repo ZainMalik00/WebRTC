@@ -14,16 +14,16 @@ describe('AppComponent', () => {
     expect(app).toBeTruthy();
   });
 
-  it(`should have the 'WebRTC' title`, () => {
+  it(`should have the 'webrtc' title`, () => {
     const fixture = TestBed.createComponent(AppComponent);
     const app = fixture.componentInstance;
-    expect(app.title).toEqual('WebRTC');
+    expect(app.title).toEqual('webrtc');
   });
 
   it('should render title', () => {
     const fixture = TestBed.createComponent(AppComponent);
     fixture.detectChanges();
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('h1')?.textContent).toContain('Hello, WebRTC');
+    expect(compiled.querySelector('h1')?.textContent).toContain('Hello, webrtc');
   });
 });
