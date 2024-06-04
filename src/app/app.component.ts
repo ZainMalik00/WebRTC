@@ -1,4 +1,4 @@
-import { Component, ElementRef, ViewChild, inject } from '@angular/core';
+import { Component, ElementRef, Signal, ViewChild, WritableSignal, computed, effect, inject, signal } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { Firestore, addDoc, collection, deleteDoc, doc, docSnapshots, getDoc, getDocs, setDoc } from '@angular/fire/firestore';
 @Component({
@@ -24,18 +24,45 @@ export class AppComponent {
   roomId!: string;
   currentRoom!: string;
 
-  isUserMediaSetup: Boolean = false;
-  hasCreatedRoom: Boolean = false;
+  isUserMediaSetup: WritableSignal<boolean> = signal(false);
+  hasCreatedRoom: WritableSignal<boolean> = signal(false);
+  hasJoinedRoom: WritableSignal<boolean> = signal(false);
+
+  canCreateRoom: Signal<boolean> = computed(() => {
+    if(this.isUserMediaSetup() && !this.hasCreatedRoom() && !this.hasJoinedRoom()){
+      return true;
+    }
+    return false;
+  });
+  
+  canJoinRoom: Signal<boolean> = computed(() => {
+    if(this.isUserMediaSetup() && !this.hasCreatedRoom() && !this.hasJoinedRoom()){
+      return true;
+    }
+    return false;
+  });
+
+  canHangUp: Signal<boolean> = computed(() => {
+    if(this.isUserMediaSetup() && (this.hasCreatedRoom() || this.hasJoinedRoom())){
+      return true;
+    }
+    return false;
+  });
+
+  constructor() {
+  }
 
   ngOnInit(): void{
-    this.isUserMediaSetup = false;
-    this.hasCreatedRoom = false;
+    this.isUserMediaSetup.set(false);
+    this.hasCreatedRoom.set(false);
+    this.hasJoinedRoom.set(false);
  }
 
  ngAfterViewInit() {}
 
   ngOnDestroy() {
     (this.localVideo.nativeElement.srcObject as MediaStream).getVideoTracks()[0].stop();
+    this.deregisterPeerConnectionListeners();
   }
 
   configuration = {
@@ -55,7 +82,7 @@ export class AppComponent {
       this.localVideo.nativeElement.srcObject = stream;
       this.localStream = stream;
       this.localVideo.nativeElement.play();
-      this.isUserMediaSetup = true;
+      this.isUserMediaSetup.set(true);
     });;
 
   }
@@ -64,11 +91,12 @@ export class AppComponent {
     this.localVideo.nativeElement.pause();
     (this.localVideo.nativeElement.srcObject as MediaStream).getVideoTracks()[0].stop();
     this.localVideo.nativeElement.srcObject = null;
+    this.isUserMediaSetup.set(false);
   };
 
   async createRoom() {
 
-    this.hasCreatedRoom = true;
+    this.hasCreatedRoom.set(true);
     this.createPeerConnection();
 
     // Code for creating a room
@@ -126,9 +154,24 @@ export class AppComponent {
     });
   }
 
+  joinRoom() {
+    this.hasJoinedRoom.set(true);
+  
+    // document.querySelector('#confirmJoinBtn').
+    //     addEventListener('click', async () => {
+    //       roomId = document.querySelector('#room-id').value;
+    //       console.log('Join room: ', roomId);
+    //       document.querySelector(
+    //           '#currentRoom').innerText = `Current room is ${roomId} - You are the callee!`;
+    //       await joinRoomById(roomId);
+    //     }, {once: true});
+    // roomDialog.open();
+  }
+
   async hangUp() {
 
-    this.hasCreatedRoom = false;
+    this.hasCreatedRoom.set(false);
+    this.hasJoinedRoom.set(false);
     this.currentRoom = '';
 
     this.localStream.getTracks().forEach(track => {
@@ -167,7 +210,7 @@ export class AppComponent {
       await deleteDoc(doc(this.firestore, 'rooms', this.roomId));
     }
   
-    document.location.reload();
+    // document.location.reload();
   }
 
   createPeerConnection(){

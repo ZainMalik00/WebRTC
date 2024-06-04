@@ -1,19 +1,19 @@
 <div>
   <h1>Welcome to WebRTC</h1>
   <div id="buttons">
-    <button #openMediaBtn (click)="openUserMedia()">
+    <button #openMediaBtn (click)="openUserMedia()" [disabled]="isUserMediaSetup()">
       <span class="mdc-button__label">Open camera & microphone</span>
     </button>
-    <button #closeMediaBtn (click)="closeUserMedia()">
+    <button #closeMediaBtn (click)="closeUserMedia()" [disabled]="!isUserMediaSetup()">
       <span class="mdc-button__label">Close camera & microphone</span>
     </button>
-    <button id="createRoomButton" (click)="createRoom()" [disabled]="!isUserMediaSetup && !hasCreatedRoom">
+    <button id="createRoomButton" (click)="createRoom()" [disabled]="!canCreateRoom()">
       <span class="mdc-button__label">Create room</span>
     </button>
-    <button id="joinRoomButton" [disabled]="!isUserMediaSetup && !hasCreatedRoom">
+    <button id="joinRoomButton" (click)="joinRoom()" [disabled]="!canJoinRoom()">
       <span class="mdc-button__label">Join room</span>
     </button>
-    <button  id="hangupButton" (click)="hangUp()" [disabled]="!isUserMediaSetup">
+    <button  id="hangupButton" (click)="hangUp()" [disabled]="!canHangUp()">
       <span class="mdc-button__label">Hangup</span>
     </button>
   </div>
