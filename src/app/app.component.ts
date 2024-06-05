@@ -1,32 +1,32 @@
 import { Component, ElementRef, Signal, ViewChild, WritableSignal, computed, effect, inject, signal } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
-import { Firestore, addDoc, collection, deleteDoc, doc, docSnapshots, getDoc, getDocs, setDoc } from '@angular/fire/firestore';
+import { Firestore, addDoc, collection, deleteDoc, doc, docSnapshots, getDoc, getDocs, onSnapshot, query, updateDoc, where } from '@angular/fire/firestore';
+import { FormsModule, ReactiveFormsModule, FormControl, FormGroup } from '@angular/forms';
+
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet],
+  imports: [RouterOutlet, FormsModule, ReactiveFormsModule],
   templateUrl: './app.component.html',
   styleUrl: './app.component.scss'
 })
 export class AppComponent {
   title = 'webrtc';
-  
   firestore: Firestore = inject(Firestore);
 
   @ViewChild("localVideo", {static: true}) localVideo!: ElementRef<HTMLVideoElement>;
-  @ViewChild("remoteVideo") remoteVideo !: ElementRef<HTMLVideoElement>;
-  // @ViewChild("currentRoom") currentRoom !: string;
+  @ViewChild("remoteVideo", {static: true}) remoteVideo !: ElementRef<HTMLVideoElement>;
 
   peerConnection!: RTCPeerConnection;
   localStream!: MediaStream;
   remoteStream!: MediaStream;
-  roomDialog = null;
   roomId!: string;
   currentRoom!: string;
 
   isUserMediaSetup: WritableSignal<boolean> = signal(false);
   hasCreatedRoom: WritableSignal<boolean> = signal(false);
   hasJoinedRoom: WritableSignal<boolean> = signal(false);
+  showJoinRoomForm: WritableSignal<boolean> = signal(false);
 
   canCreateRoom: Signal<boolean> = computed(() => {
     if(this.isUserMediaSetup() && !this.hasCreatedRoom() && !this.hasJoinedRoom()){
@@ -36,7 +36,7 @@ export class AppComponent {
   });
   
   canJoinRoom: Signal<boolean> = computed(() => {
-    if(this.isUserMediaSetup() && !this.hasCreatedRoom() && !this.hasJoinedRoom()){
+    if(this.isUserMediaSetup() && !this.hasCreatedRoom() && !this.hasJoinedRoom() && !this.showJoinRoomForm()){
       return true;
     }
     return false;
@@ -49,19 +49,24 @@ export class AppComponent {
     return false;
   });
 
-  constructor() {
-  }
+  joinRoomForm = new FormGroup({
+    newRoomId: new FormControl<string>("")
+  });
 
   ngOnInit(): void{
     this.isUserMediaSetup.set(false);
     this.hasCreatedRoom.set(false);
     this.hasJoinedRoom.set(false);
+    this.remoteStream = new MediaStream();
  }
 
- ngAfterViewInit() {}
+ ngAfterViewInit() {
+  this.remoteVideo.nativeElement.srcObject = this.remoteStream;
+ }
 
   ngOnDestroy() {
     (this.localVideo.nativeElement.srcObject as MediaStream).getVideoTracks()[0].stop();
+    (this.remoteVideo.nativeElement.srcObject as MediaStream).getVideoTracks()[0].stop();
     this.deregisterPeerConnectionListeners();
   }
 
@@ -97,6 +102,7 @@ export class AppComponent {
   async createRoom() {
 
     this.hasCreatedRoom.set(true);
+    this.showJoinRoomForm.set(false);
     this.createPeerConnection();
 
     // Code for creating a room
@@ -122,13 +128,7 @@ export class AppComponent {
         console.error("Error creating room: ", error);
       });
 
-    this.peerConnection.addEventListener('track', event => {
-      console.log('Got remote track:', event.streams[0]);
-      event.streams[0].getTracks().forEach(track => {
-        console.log('Add a track to the remoteStream:', track);
-        this.remoteStream.addTrack(track);
-      });
-    });
+    this.setupRemoteStreamListener();
   
     this.collectCallerCandidates();
 
@@ -143,73 +143,114 @@ export class AppComponent {
     }));
   
     // Listen for remote ICE candidates below
-    docSnapshots(doc(this.firestore, 'rooms', this.roomId, 'callerCandidates')).subscribe(async (snapshot: any) => {
+    const queryCalleeCandidates = query(collection(this.firestore, 'rooms', this.roomId, 'calleeCandidates'), where("sdpMid", ">=", "0"));
+    onSnapshot(queryCalleeCandidates, (snapshot) => {
       snapshot.docChanges().forEach(async (change: { type: string; doc: { data: () => any; }; }) => {
         if (change.type === 'added') {
           let data = change.doc.data();
-          console.log(`Got new remote ICE candidate: ${JSON.stringify(data)}`);
+          console.log("Got new remote ICE candidate: ", data);
           await this.peerConnection.addIceCandidate(new RTCIceCandidate(data));
         }
       });
     });
   }
 
-  joinRoom() {
+  openJoinRoomForm() {
+    this.showJoinRoomForm.set(true);
+  }
+
+  async joinRoom() {
+    this.showJoinRoomForm.set(false);
     this.hasJoinedRoom.set(true);
-  
-    // document.querySelector('#confirmJoinBtn').
-    //     addEventListener('click', async () => {
-    //       roomId = document.querySelector('#room-id').value;
-    //       console.log('Join room: ', roomId);
-    //       document.querySelector(
-    //           '#currentRoom').innerText = `Current room is ${roomId} - You are the callee!`;
-    //       await joinRoomById(roomId);
-    //     }, {once: true});
-    // roomDialog.open();
+
+    let joinOffer: any;
+
+    await getDoc(doc(this.firestore, 'rooms', this.joinRoomForm.getRawValue().newRoomId?.toString()!))
+      .then((room: any) => {
+        console.log('Found Room:', room.id);
+        this.roomId = room.id;
+        joinOffer = room.data().offer;
+      }).catch(error => {
+        console.error("Unable to Find Room", error);
+      });
+
+      if(this.roomId){
+        this.peerConnection = new RTCPeerConnection(this.configuration);
+        this.registerPeerConnectionListeners();
+
+        this.localStream.getTracks().forEach(track => {
+              this.peerConnection.addTrack(track, this.localStream);
+        });
+
+        // Code for collecting ICE candidates below
+        this.setupRemoteStreamListener();
+
+        this.collectCalleeCandidates();
+
+        // Code for creating SDP answer below
+        console.log('Got offer:', joinOffer);
+        await this.peerConnection.setRemoteDescription(new RTCSessionDescription(joinOffer));
+        const answer = await this.peerConnection.createAnswer();
+        console.log('Created answer:', answer);
+        await this.peerConnection.setLocalDescription(answer);
+
+        const roomAnswer = {
+          answer: {
+            type: answer.type,
+            sdp: answer.sdp,
+          },
+        };
+
+        await updateDoc(doc(this.firestore, 'rooms', this.roomId), roomAnswer)
+        .then((room: any) => {
+          console.log(`updated room with SDP answer. Room ID: ${this.roomId}`);
+          this.currentRoom = `Current room is ${this.roomId} - You are the callee!`;
+        })
+        .catch(error => {
+          console.error("Error joining room: ", error);
+        });
+
+        // Listen for remote ICE candidates below
+        const queryCallerCandidates = query(collection(this.firestore, 'rooms', this.roomId, 'callerCandidates'), where("sdpMid", ">=", "0"));
+        onSnapshot(queryCallerCandidates, (snapshot) => {
+          snapshot.docChanges().forEach(async (change: { type: string; doc: { data: () => any; }; }) => {
+            if (change.type === 'added') {
+              let data = change.doc.data();
+              console.log("Got new remote ICE candidate: ", data);
+              await this.peerConnection.addIceCandidate(new RTCIceCandidate(data));
+            }
+          });
+        });
+      }
   }
 
   async hangUp() {
 
-    this.hasCreatedRoom.set(false);
-    this.hasJoinedRoom.set(false);
-    this.currentRoom = '';
-
     this.localStream.getTracks().forEach(track => {
       track.stop();
     });
-  
+ 
     if (this.remoteStream) {
       this.remoteStream.getTracks().forEach(track => track.stop());
+      if(this.remoteVideo.nativeElement.srcObject){
+        (this.remoteVideo.nativeElement.srcObject as MediaStream).getVideoTracks()[0].stop();
+        this.remoteVideo.nativeElement.srcObject = null;
+      }
     }
   
     if (this.peerConnection) {
+      this.deregisterPeerConnectionListeners();
       this.peerConnection.close();
     }
   
-    // Delete room on hangup
-    if (this.roomId) {
-
-      await getDocs(collection(this.firestore, 'rooms', this.roomId, 'callerCandidates'))
-      .then((callerCandidates: any) => {
-        callerCandidates.forEach(async (callerCandidate: any) => {
-          await deleteDoc(doc(this.firestore, 'rooms', this.roomId, 'callerCandidates', callerCandidate.id));
-        });
-      }).catch(error => {
-        console.error("No CallerCandidates to delete.", error);
-      });
-
-      await getDocs(collection(this.firestore, 'rooms', this.roomId, 'calleeCandidates'))
-      .then((calleeCandidates: any) => {
-        calleeCandidates.forEach(async (calleeCandidate: any) => {
-          await deleteDoc(doc(this.firestore, 'rooms', this.roomId, 'calleeCandidates', calleeCandidate.id));
-        });
-      }).catch(error => {
-        console.error("No CallerCandidates to delete.", error);
-      });
-
-      await deleteDoc(doc(this.firestore, 'rooms', this.roomId));
-    }
+    this.closeUserMedia();
+    this.deleteCreatedRoom();
   
+    this.hasCreatedRoom.set(false);
+    this.hasJoinedRoom.set(false);
+    this.showJoinRoomForm.set(false);
+    this.currentRoom = '';
+    this.roomId = '';
     // document.location.reload();
   }
 
@@ -237,6 +278,19 @@ export class AppComponent {
     });
   };
 
+  collectCalleeCandidates(){
+    const calleeCandidatesCollection = collection(this.firestore, 'rooms', this.roomId, 'calleeCandidates');
+      
+    this.peerConnection.addEventListener('icecandidate', async event => {
+      if (!event.candidate) {
+        console.log('Got final candidate!');
+        return;
+      }
+      console.log('Got candidate: ', event.candidate);
+      await addDoc(calleeCandidatesCollection, event.candidate.toJSON());
+    });
+  }
+
   registerPeerConnectionListeners() {
     this.peerConnection.addEventListener('icegatheringstatechange', () => {
       console.log(
@@ -252,8 +306,7 @@ export class AppComponent {
     });
   
     this.peerConnection.addEventListener('iceconnectionstatechange ', () => {
-      console.log(
-          `ICE connection state change: ${this.peerConnection.iceConnectionState}`);
+      console.log(`ICE connection state change: ${this.peerConnection.iceConnectionState}`);
     });
   };
 
@@ -264,6 +317,52 @@ export class AppComponent {
     this.peerConnection.removeEventListener('connectionstatechange', ()=> {});
     this.peerConnection.removeEventListener('signalingstatechange', () => {});
     this.peerConnection.removeEventListener('iceconnectionstatechange', () => {});
+  };
+
+  async deleteCreatedRoom() {
+    if (this.hasCreatedRoom()) {
+      await getDocs(collection(this.firestore, 'rooms', this.roomId, 'callerCandidates'))
+      .then((callerCandidates: any) => {
+        callerCandidates.forEach(async (callerCandidate: any) => {
+          await deleteDoc(doc(this.firestore, 'rooms', this.roomId, 'callerCandidates', callerCandidate.id));
+        });
+      }).catch(error => {
+        console.error("No CallerCandidates to delete.", error);
+      });
+
+      await getDocs(collection(this.firestore, 'rooms', this.roomId, 'calleeCandidates'))
+      .then((calleeCandidates: any) => {
+        calleeCandidates.forEach(async (calleeCandidate: any) => {
+          await deleteDoc(doc(this.firestore, 'rooms', this.roomId, 'calleeCandidates', calleeCandidate.id));
+        });
+      }).catch(error => {
+        console.error("No CalleeCandidates to delete.", error);
+      });
+
+      await deleteDoc(doc(this.firestore, 'rooms', this.roomId));
+    }
+  };
+
+  setupRemoteStreamListener() {
+    let isRemoteVideoPlaying = false;
+    this.peerConnection.addEventListener('track', async event => {
+      console.log('Got remote track:', event.streams[0]);
+      event.streams[0].getTracks().forEach(track => {
+        if(this.remoteStream.getTrackById(track.id)){
+          console.log('Track already in remoteStream:', track);
+          isRemoteVideoPlaying = true;
+        }else {
+          console.log('Adding track to the remoteStream:', track);
+          this.remoteStream.addTrack(track);
+        }
+      });
+
+      if(!isRemoteVideoPlaying){
+        console.log("Adding Remote Video", this.remoteStream);
+        this.remoteVideo.nativeElement.srcObject = this.remoteStream;
+        await this.remoteVideo.nativeElement.play();
+      }
+    });
   };
 
 }

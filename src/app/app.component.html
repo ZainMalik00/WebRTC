@@ -10,7 +10,7 @@
     <button id="createRoomButton" (click)="createRoom()" [disabled]="!canCreateRoom()">
       <span class="mdc-button__label">Create room</span>
     </button>
-    <button id="joinRoomButton" (click)="joinRoom()" [disabled]="!canJoinRoom()">
+    <button id="joinRoomButton" (click)="openJoinRoomForm()" [disabled]="!canJoinRoom()">
       <span class="mdc-button__label">Join room</span>
     </button>
     <button  id="hangupButton" (click)="hangUp()" [disabled]="!canHangUp()">
@@ -20,10 +20,15 @@
 
   <div>
     <span id="currentRoom">{{currentRoom}}</span>
+    <form [formGroup]="joinRoomForm" (submit)="joinRoom()" [hidden]="!showJoinRoomForm()">
+      <span id="joinRoomLabel">Enter room id:</span>
+      <input type="text" [formControl] = "joinRoomForm.controls.newRoomId">
+      <button type="submit">Join Room</button>
+    </form>
   </div>
 
   <div id="videos">
-    <video #localVideo muted preload="auto"></video>
-    <video #remoteVideo autoplay playsinline></video>
+    <video #localVideo muted playsInline preload="auto"></video>
+    <video #remoteVideo playsInline preload="auto"></video>
   </div>
 </div>
